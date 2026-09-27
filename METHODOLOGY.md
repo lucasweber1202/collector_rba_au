@@ -1,6 +1,6 @@
 # RBA inflation predictors
 
-Authority: `guimasuko/collector_template` main commit `8e4613b36c2808a7de234934a81bb26f7a22d367`.
+Authority: `guimasuko/collector_template` main `723f8633bbd367ad9cca0a199e84b10fd355da36`; `AUD` is in its `metadata.country` vocabulary and is what this collector emits.
 
 ## Source and selection
 
@@ -22,3 +22,35 @@ On 2026-09-26 UTC, the two live workbooks exposed four retained series and 1,487
 | FRERIWI | 1970-06-30: 141.12888429538572 | 1998-06-30: 100.79449284775535 | 2026-06-30: 146.36258086692246 |
 
 PIT mode is `current-backfill` for first ingestion, followed by observed collector vintages on subsequent runs. No past as-of view exists before the first collection. The source does not supply per-observation release timestamps or a revision event feed in these workbooks; `last_publish_date` comes from their official publication-date header and may cover the workbook as a whole.
+
+## Payload, layout and history
+
+`check_payload` refuses HTML/challenge pages whatever their `Content-Type`, a
+body without the XLSX `PK\x03\x04` magic and an implausibly small file. A
+missing `Data` sheet, a changed header, an unexpected frequency/unit, an
+upstream owner other than `RBA` or a missing selected ID raises
+`SourceLayoutError`; the run stops before writing and logs
+`release_status=layout_changed`. The default start date is now 1970-01-01:
+the previous 1999 default silently dropped 1970–1998 on a first run (603 of
+1,487 observations), contradicting the coverage stated above.
+
+## Release monitoring
+
+Each workbook is classified on every run from its own `Publication date`
+header row (latest across the selected columns) and latest covered period,
+against `metadata` before the run and the rows changed: `first_release`,
+`same_release`, `new_release`, `revised_source` or `layout_changed`. An
+unchanged rerun on a later day is `same_release`; a publication date that goes
+backwards fails the run inside the write transaction. Observed on 2026-09-27:
+F1.1 published 2026-09-01 (data to 2026-08-31), F15 published 2026-08-04 (data
+to 2026-06-30).
+
+## PostgreSQL and SQL grammar evidence (2026-09-27)
+
+- PostgreSQL 16.13, live `main.py`: run 1 wrote 1,487 observations and 4
+  metadata rows (`first_release`); run 2 wrote nothing (`same_release`).
+- `tests/test_postgres_integration.py`: canonical tables, idempotent rerun,
+  later-day vintage, same-day overwrite, metadata MERGE with NULL in every
+  nullable column, time-series MERGE, run log, release classification.
+- All emitted SQL parses with the Spark SQL grammar (pyspark 4.1.1).
+  **Databricks corporate runtime: not verified.**
