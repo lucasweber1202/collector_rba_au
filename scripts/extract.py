@@ -14,6 +14,7 @@ import httpx
 import openpyxl
 
 from scripts.config import REQUEST_TIMEOUT, USER_AGENT
+from scripts.releases import ReleaseEvidence
 from scripts.time_series import Observation
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,15 @@ SELECTED = {
 }
 MAX_STALE_MONTHS = {"monthly": 3, "quarterly": 6}
 MIN_HISTORY_YEARS = {"monthly": 3, "quarterly": 5}
+MIN_PAYLOAD_BYTES = 20_000
+
+
+class SourceLayoutError(ValueError):
+    """An RBA workbook no longer has the audited layout."""
+
+
+class SourceAccessError(RuntimeError):
+    """The source answered with something other than the requested workbook."""
 
 
 @dataclass(frozen=True)
@@ -38,6 +48,7 @@ class SourceData:
 
     observations: list[Observation]
     catalog: dict[str, dict[str, Any]]
+    releases: tuple[ReleaseEvidence, ...] = ()
 
 
 def build_series_id(table: str, native_id: str) -> str:
@@ -75,12 +86,15 @@ def _date(value: object) -> date:
 
 def parse_workbook(blob: bytes, table: str) -> SourceData:
     """Parse native IDs and source labels without shifting dates or units."""
-    sheet = openpyxl.load_workbook(io.BytesIO(blob), read_only=True, data_only=True)["Data"]
+    workbook = openpyxl.load_workbook(io.BytesIO(blob), read_only=True, data_only=True)
+    if "Data" not in workbook:
+        raise SourceLayoutError(f"RBA {table} Data sheet missing")
+    sheet = workbook["Data"]
     rows = iter(sheet.values)
     header = [next(rows) for _ in range(11)]
     labels = ["Title", "Description", "Frequency", "Type", "Units", "Source", "Publication date", "Series ID"]
     if [header[i][0] for i in (1, 2, 3, 4, 5, 8, 9, 10)] != labels:
-        raise ValueError(f"RBA {table} header changed")
+        raise SourceLayoutError(f"RBA {table} header changed")
     columns: dict[int, dict[str, Any]] = {}
     for index, native in enumerate(header[10]):
         if index == 0 or native not in SELECTED[table]:
@@ -88,9 +102,9 @@ def parse_workbook(blob: bytes, table: str) -> SourceData:
         frequency = str(header[3][index]).lower()
         unit = "index" if str(header[5][index]).startswith("Index") else "percent"
         if frequency not in MAX_STALE_MONTHS or (unit == "percent" and header[5][index] != "Per cent"):
-            raise ValueError(f"Unexpected RBA {table} frequency or unit for {native}")
+            raise SourceLayoutError(f"Unexpected RBA {table} frequency or unit for {native}")
         if header[8][index] != "RBA":
-            raise ValueError(f"Unexpected upstream owner for {native}: {header[8][index]}")
+            raise SourceLayoutError(f"Unexpected upstream owner for {native}: {header[8][index]}")
         sid = build_series_id(table, str(native))
         columns[index] = {
             "series_id": sid,
@@ -104,7 +118,7 @@ def parse_workbook(blob: bytes, table: str) -> SourceData:
             "last_publish_date": _date(header[9][index]),
         }
     if {parse_series_id(v["series_id"])[1] for v in columns.values()} != SELECTED[table]:
-        raise ValueError(f"RBA {table} missing selected official IDs")
+        raise SourceLayoutError(f"RBA {table} missing selected official IDs")
     snapshot = hashlib.sha256(blob).hexdigest()
     observations: list[Observation] = []
     for row in rows:
@@ -144,16 +158,41 @@ def filter_usable_series(data: SourceData, today: date) -> SourceData:
     return SourceData([o for o in data.observations if o.series_id in kept], {sid: v for sid, v in data.catalog.items() if sid in kept})
 
 
+def check_payload(response: httpx.Response) -> bytes:
+    """Refuse an HTML challenge or error page before it can be parsed as XLSX."""
+    response.raise_for_status()
+    blob = response.content
+    content_type = response.headers.get("content-type", "").lower()
+    head = blob[:512].lstrip().lower()
+    if "text/html" in content_type or head.startswith((b"<!doctype", b"<html")):
+        raise SourceAccessError(f"RBA returned HTML instead of a workbook: {response.url}")
+    if not blob.startswith(b"PK\x03\x04"):
+        raise SourceAccessError(f"RBA workbook is not an XLSX file: {response.url}")
+    if len(blob) < MIN_PAYLOAD_BYTES:
+        raise SourceAccessError(f"RBA workbook is implausibly small ({len(blob)} bytes)")
+    return blob
+
+
 def collect() -> SourceData:
     """Fetch each official workbook once, failing loudly on source errors."""
     observations: list[Observation] = []
     catalog: dict[str, dict[str, Any]] = {}
+    parsed_tables: dict[str, SourceData] = {}
     with httpx.Client(timeout=REQUEST_TIMEOUT, headers={"User-Agent": USER_AGENT}) as client:
         for table, url in TABLES.items():
-            response = client.get(url)
-            response.raise_for_status()
-            parsed = parse_workbook(response.content, table)
+            parsed = parse_workbook(check_payload(client.get(url)), table)
+            parsed_tables[table] = parsed
             observations.extend(parsed.observations)
             catalog.update(parsed.catalog)
             logger.info("%s: %d observations from %s", table, len(parsed.observations), url)
-    return filter_usable_series(SourceData(observations, catalog), datetime.now(UTC).date())
+    usable = filter_usable_series(SourceData(observations, catalog), datetime.now(UTC).date())
+    evidence = []
+    for table, parsed in parsed_tables.items():
+        ids = frozenset(parsed.catalog) & frozenset(usable.catalog)
+        if not ids:
+            continue
+        # The workbook's own "Publication date" header row, per selected column.
+        published = max(usable.catalog[sid]["last_publish_date"] for sid in ids)
+        latest = max(o.reference_date for o in usable.observations if o.series_id in ids)
+        evidence.append(ReleaseEvidence(table, TABLES[table], published, latest, ids))
+    return SourceData(usable.observations, usable.catalog, tuple(evidence))

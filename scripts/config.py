@@ -42,7 +42,8 @@ PROD = os.getenv("PROD", "false").lower() in ("1", "true", "yes")
 
 DATABASE_URL = os.getenv("COLLECTOR_DB_URL", "")
 
-DEFAULT_START_DATE = date.fromisoformat(os.getenv("COLLECTOR_START_DATE", "1999-01-01"))
+# F15 begins June 1970; keep the full published history.
+DEFAULT_START_DATE = date.fromisoformat(os.getenv("COLLECTOR_START_DATE", "1970-01-01"))
 
 REQUEST_TIMEOUT = float(os.getenv("COLLECTOR_HTTP_TIMEOUT", "30"))
 DOWNLOAD_DELAY = float(os.getenv("COLLECTOR_DOWNLOAD_DELAY", "1.0"))
