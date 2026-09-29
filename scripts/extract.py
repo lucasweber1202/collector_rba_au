@@ -17,6 +17,12 @@ from scripts.config import REQUEST_TIMEOUT, USER_AGENT
 from scripts.releases import ReleaseEvidence
 from scripts.time_series import Observation
 
+# Canonical metadata vocabulary produced by this source.
+FREQUENCIES: frozenset[str] = frozenset({"monthly", "quarterly"})
+UNITS: frozenset[str] = frozenset({"percent", "index"})
+ECO_GROUPS: frozenset[str] = frozenset({"interest_rates", "exchange_rates"})
+
+
 logger = logging.getLogger(__name__)
 COUNTRY_CURRENCY = "AUD"
 SOURCE_ROOT = "https://www.rba.gov.au/statistics/tables/"
