@@ -79,7 +79,26 @@ def _date(value: object) -> date:
             return date.fromisoformat(value[:10])
         except ValueError:
             day, month, year = value.split("-")
-            months = {name: index for index, name in enumerate(("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
+            months = {
+                name: index
+                for index, name in enumerate(
+                    (
+                        "Jan",
+                        "Feb",
+                        "Mar",
+                        "Apr",
+                        "May",
+                        "Jun",
+                        "Jul",
+                        "Aug",
+                        "Sep",
+                        "Oct",
+                        "Nov",
+                        "Dec",
+                    ),
+                    1,
+                )
+            }
             return date(int(year), months[month], int(day))
     raise ValueError(f"Unexpected RBA date: {value!r}")
 
@@ -92,7 +111,16 @@ def parse_workbook(blob: bytes, table: str) -> SourceData:
     sheet = workbook["Data"]
     rows = iter(sheet.values)
     header = [next(rows) for _ in range(11)]
-    labels = ["Title", "Description", "Frequency", "Type", "Units", "Source", "Publication date", "Series ID"]
+    labels = [
+        "Title",
+        "Description",
+        "Frequency",
+        "Type",
+        "Units",
+        "Source",
+        "Publication date",
+        "Series ID",
+    ]
     if [header[i][0] for i in (1, 2, 3, 4, 5, 8, 9, 10)] != labels:
         raise SourceLayoutError(f"RBA {table} header changed")
     columns: dict[int, dict[str, Any]] = {}
@@ -101,7 +129,9 @@ def parse_workbook(blob: bytes, table: str) -> SourceData:
             continue
         frequency = str(header[3][index]).lower()
         unit = "index" if str(header[5][index]).startswith("Index") else "percent"
-        if frequency not in MAX_STALE_MONTHS or (unit == "percent" and header[5][index] != "Per cent"):
+        if frequency not in MAX_STALE_MONTHS or (
+            unit == "percent" and header[5][index] != "Per cent"
+        ):
             raise SourceLayoutError(f"Unexpected RBA {table} frequency or unit for {native}")
         if header[8][index] != "RBA":
             raise SourceLayoutError(f"Unexpected upstream owner for {native}: {header[8][index]}")
@@ -130,8 +160,12 @@ def parse_workbook(blob: bytes, table: str) -> SourceData:
             if value is None or value == "":
                 continue
             if not isinstance(value, int | float) or not math.isfinite(value):
-                raise ValueError(f"Unexpected value {value!r} for {fields['series_id']} at {reference_date}")
-            observations.append(Observation(fields["series_id"], reference_date, float(value), snapshot))
+                raise ValueError(
+                    f"Unexpected value {value!r} for {fields['series_id']} at {reference_date}"
+                )
+            observations.append(
+                Observation(fields["series_id"], reference_date, float(value), snapshot)
+            )
     if not observations:
         raise ValueError(f"RBA {table} yielded no numeric observations")
     return SourceData(observations, {v["series_id"]: v for v in columns.values()})
@@ -149,13 +183,21 @@ def filter_usable_series(data: SourceData, today: date) -> SourceData:
         first = min(points)
         stale_months = (today.year - last.year) * 12 + today.month - last.month
         history_months = (last.year - first.year) * 12 + last.month - first.month
-        if stale_months <= MAX_STALE_MONTHS[frequency] and history_months >= MIN_HISTORY_YEARS[frequency] * 12:
+        if (
+            stale_months <= MAX_STALE_MONTHS[frequency]
+            and history_months >= MIN_HISTORY_YEARS[frequency] * 12
+        ):
             kept.add(sid)
         else:
-            logger.warning("Excluded %s: stale_months=%d history_months=%d", sid, stale_months, history_months)
+            logger.warning(
+                "Excluded %s: stale_months=%d history_months=%d", sid, stale_months, history_months
+            )
     if not kept:
         raise ValueError("No active RBA series with sufficient history")
-    return SourceData([o for o in data.observations if o.series_id in kept], {sid: v for sid, v in data.catalog.items() if sid in kept})
+    return SourceData(
+        [o for o in data.observations if o.series_id in kept],
+        {sid: v for sid, v in data.catalog.items() if sid in kept},
+    )
 
 
 def check_payload(response: httpx.Response) -> bytes:

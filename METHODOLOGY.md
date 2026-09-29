@@ -1,6 +1,6 @@
 # RBA inflation predictors
 
-Authority: `guimasuko/collector_template` main `723f8633bbd367ad9cca0a199e84b10fd355da36`; `AUD` is in its `metadata.country` vocabulary and is what this collector emits.
+Authority: `guimasuko/collector_template` main `4bc65765cedd9c14aec196cff382df6dfb318c77`; `AUD` is in its `metadata.country` vocabulary and is what this collector emits.
 
 ## Source and selection
 
@@ -54,3 +54,7 @@ to 2026-06-30).
   nullable column, time-series MERGE, run log, release classification.
 - All emitted SQL parses with the Spark SQL grammar (pyspark 4.1.1).
   **Databricks corporate runtime: not verified.**
+
+## Masuko authority verification
+
+Pinned authority: `guimasuko/collector_template@4bc65765cedd9c14aec196cff382df6dfb318c77`. Physical `.github/` and `.vscode/` paths are checked against Git blobs. `.gitignore` and `scripts/databricks_engine.py` have no physical path in the template tree; they are canonical fenced blocks in `GUIDELINES.md` sections 8.1 and 8.9. The guideline Git blob is `089fbbca6a2241d3f02777b82631fbf81d49f6e0`; the two derived file blobs are `f0d1368264d24d7959d3137d618930a06f33795e` and `73821f7a530ab5cca2f5313180d71c17173e6e59`. `tests/test_architecture.py` checks all local blobs on every run. For independent source derivation, check out the exact authority commit and run `MASUKO_TEMPLATE_DIR=/path/to/collector_template python -m pytest -q tests/test_architecture.py`. This checks the guideline blob, extracts both fenced blocks and checks their hashes.
