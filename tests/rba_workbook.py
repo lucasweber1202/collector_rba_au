@@ -8,12 +8,23 @@ from datetime import date
 import openpyxl
 
 SERIES = {
-    "F01": [("FIRMMCRT", "Cash Rate Target", "Monthly", "Per cent"), ("FIRMMCRI", "Interbank Overnight Cash Rate", "Monthly", "Per cent")],
-    "F15": [("FRERTWI", "Real Trade-Weighted Index", "Quarterly", "Index, March 1995 = 100"), ("FRERIWI", "Real Import-Weighted Index", "Quarterly", "Index, March 1995 = 100")],
+    "F01": [
+        ("FIRMMCRT", "Cash Rate Target", "Monthly", "Per cent"),
+        ("FIRMMCRI", "Interbank Overnight Cash Rate", "Monthly", "Per cent"),
+    ],
+    "F15": [
+        ("FRERTWI", "Real Trade-Weighted Index", "Quarterly", "Index, March 1995 = 100"),
+        ("FRERIWI", "Real Import-Weighted Index", "Quarterly", "Index, March 1995 = 100"),
+    ],
 }
 
 
-def workbook(table: str, rows: list[tuple[date, list[float | None]]], published: date = date(2026, 9, 1), owner: str = "RBA") -> bytes:
+def workbook(
+    table: str,
+    rows: list[tuple[date, list[float | None]]],
+    published: date = date(2026, 9, 1),
+    owner: str = "RBA",
+) -> bytes:
     series = SERIES[table]
     book = openpyxl.Workbook()
     sheet = book.active
@@ -41,5 +52,7 @@ def monthly(months: int = 48) -> bytes:
     rows: list[tuple[date, list[float | None]]] = []
     for m in range(months):
         year, month0 = divmod(2022 * 12 + 8 + m, 12)
-        rows.append((date(year, month0 + 1, 28), [3.5 + 0.01 * m, None if m == 0 else 3.51 + 0.01 * m]))
+        rows.append(
+            (date(year, month0 + 1, 28), [3.5 + 0.01 * m, None if m == 0 else 3.51 + 0.01 * m])
+        )
     return workbook("F01", rows)
