@@ -6,6 +6,7 @@ import hashlib
 import io
 import logging
 import math
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
@@ -13,7 +14,7 @@ from typing import Any
 import httpx
 import openpyxl
 
-from scripts.config import REQUEST_TIMEOUT, USER_AGENT
+from scripts.config import BACKOFF_FACTOR, DOWNLOAD_DELAY, MAX_RETRIES, REQUEST_TIMEOUT, USER_AGENT
 from scripts.releases import ReleaseEvidence
 from scripts.time_series import Observation
 
@@ -150,7 +151,7 @@ def parse_workbook(blob: bytes, table: str) -> SourceData:
             "frequency": frequency,
             "unit": unit,
             "eco_group": "interest_rates" if table == "F01" else "exchange_rates",
-            "source_url": TABLES[table],
+            "source_url": "https://www.rba.gov.au/statistics/tables/",
             "last_publish_date": _date(header[9][index]),
         }
     if {parse_series_id(v["series_id"])[1] for v in columns.values()} != SELECTED[table]:
@@ -228,7 +229,7 @@ def collect() -> SourceData:
     parsed_tables: dict[str, SourceData] = {}
     with httpx.Client(timeout=REQUEST_TIMEOUT, headers={"User-Agent": USER_AGENT}) as client:
         for table, url in TABLES.items():
-            parsed = parse_workbook(check_payload(client.get(url)), table)
+            parsed = parse_workbook(check_payload(_http_get(client, url)), table)
             parsed_tables[table] = parsed
             observations.extend(parsed.observations)
             catalog.update(parsed.catalog)
@@ -244,3 +245,39 @@ def collect() -> SourceData:
         latest = max(o.reference_date for o in usable.observations if o.series_id in ids)
         evidence.append(ReleaseEvidence(table, TABLES[table], published, latest, ids))
     return SourceData(usable.observations, usable.catalog, tuple(evidence))
+
+
+def _http_get(client: httpx.Client, url: str) -> httpx.Response:
+    """Retry transport failures, HTTP 429 and 5xx; preserve source-specific checks."""
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            time.sleep(DOWNLOAD_DELAY)
+            response = client.get(url)
+            if response.status_code == 429 or response.status_code >= 500:
+                response.raise_for_status()
+            return response
+        except (httpx.TransportError, httpx.HTTPStatusError):
+            if attempt == MAX_RETRIES:
+                raise
+            wait = BACKOFF_FACTOR ** attempt
+            logging.getLogger(__name__).warning(
+                "GET failed, retry %d/%d in %.1fs", attempt, MAX_RETRIES, wait
+            )
+            time.sleep(wait)
+    raise RuntimeError("COLLECTOR_MAX_RETRIES must be positive")
+
+
+UPSTREAM_METADATA: dict[str, dict[str, Any]] = {}
+
+
+def collect_raw_data(start_date: date | None = None) -> dict[date, dict[str, float | None]]:
+    """Expose the canonical mapping and refresh upstream descriptors on every call."""
+    UPSTREAM_METADATA.clear()
+    data = collect()
+    UPSTREAM_METADATA.update(data.catalog)
+    parsed: dict[date, dict[str, float | None]] = {}
+    for item in data.observations:
+        if start_date is None or item.reference_date >= start_date:
+            parsed.setdefault(item.reference_date, {})[item.series_id] = item.value
+    logging.getLogger(__name__).info("Parsed %d dates", len(parsed))
+    return parsed
